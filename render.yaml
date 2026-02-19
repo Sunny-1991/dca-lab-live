@@ -6,9 +6,15 @@ services:
     autoDeploy: true
     buildCommand: ""
     startCommand: node server.js
-    healthCheckPath: /api/meta
+    healthCheckPath: /healthz
     envVars:
       - key: HOST
         value: 0.0.0.0
+      - key: AUTH_ENABLED
+        value: true
+      - key: AUTH_COOKIE_SECURE
+        value: auto
+      - key: AUTH_SESSION_TTL_MS
+        value: 86400000
       - key: CORS_ALLOW_ORIGIN
-        value: https://sunny-1991.github.io
+        value: "*"
