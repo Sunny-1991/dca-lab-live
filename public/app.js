@@ -217,9 +217,6 @@ function updateStartDateBounds() {
   const minDate = allAssetsMeta
     .map((asset) => asset.earliestDate)
     .reduce((earliest, current) => (current < earliest ? current : earliest));
-  const commonStartDate = selectedMeta
-    .map((asset) => asset.earliestDate)
-    .reduce((latest, current) => (current > latest ? current : latest));
   const maxDate = selectedMeta
     .map((asset) => asset.latestDate)
     .reduce((earliest, current) => (current < earliest ? current : earliest));
@@ -231,12 +228,7 @@ function updateStartDateBounds() {
     startDateInput.value = getQuickDateTarget("y10", minDate, maxDate);
   }
 
-  const hintBase = `可选区间：${formatDate(minDate)} 至 ${formatDate(maxDate)}`;
-  if (commonStartDate > minDate) {
-    dateBoundHint.textContent = `${hintBase}（共同回测起点：${formatDate(commonStartDate)}）`;
-  } else {
-    dateBoundHint.textContent = hintBase;
-  }
+  dateBoundHint.textContent = `可选区间：${formatDate(minDate)} 至 ${formatDate(maxDate)}`;
   refreshDateQuickButtonState();
 }
 
