@@ -36,7 +36,9 @@ const BACKGROUND_REFRESH_TRIGGER_MS = readPositiveMs(
 const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || "*";
 const CORS_ALLOW_HEADERS = process.env.CORS_ALLOW_HEADERS || "Content-Type";
 const CORS_ALLOW_METHODS = "GET,POST,OPTIONS";
-const AUTH_ENABLED = String(process.env.AUTH_ENABLED || "true").toLowerCase() !== "false";
+const AUTH_ENABLED = ["1", "true", "yes", "on"].includes(
+  String(process.env.AUTH_ENABLED || "false").toLowerCase()
+);
 const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "dca_member_session";
 const AUTH_SESSION_TTL_MS = readPositiveMs(process.env.AUTH_SESSION_TTL_MS, 24 * 60 * 60 * 1000);
 const AUTH_COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || "auto").toLowerCase();
