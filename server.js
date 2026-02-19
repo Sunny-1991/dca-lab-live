@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { URL } = require("node:url");
 
 const HOST = process.env.HOST || "127.0.0.1";
@@ -35,6 +36,15 @@ const BACKGROUND_REFRESH_TRIGGER_MS = readPositiveMs(
 const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || "*";
 const CORS_ALLOW_HEADERS = process.env.CORS_ALLOW_HEADERS || "Content-Type";
 const CORS_ALLOW_METHODS = "GET,POST,OPTIONS";
+const AUTH_ENABLED = String(process.env.AUTH_ENABLED || "true").toLowerCase() !== "false";
+const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "dca_member_session";
+const AUTH_SESSION_TTL_MS = readPositiveMs(process.env.AUTH_SESSION_TTL_MS, 24 * 60 * 60 * 1000);
+const AUTH_COOKIE_SECURE = String(process.env.AUTH_COOKIE_SECURE || "auto").toLowerCase();
+const AUTH_CODE_PEPPER = process.env.AUTH_CODE_PEPPER || "";
+const AUTH_SESSION_SECRET =
+  process.env.AUTH_SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const ACCESS_CONTROL_DIR = path.join(ROOT_DIR, "data", "access-control");
+const MEMBER_STORE_PATH = path.join(ACCESS_CONTROL_DIR, "members.json");
 
 const RETURN_MODES = {
   PRICE: "price",
@@ -171,6 +181,11 @@ const ASSETS = {
 const inMemorySeries = new Map();
 const refreshJobs = new Map();
 let autoRefreshTimer = null;
+const authSessions = new Map();
+let memberStoreCache = {
+  mtimeMs: -1,
+  members: [],
+};
 
 function readPositiveMs(value, fallbackMs) {
   const parsed = Number(value);
@@ -199,13 +214,14 @@ function getAssetProfile(assetId, returnMode) {
   return { assetMeta, profile, returnMode: mode };
 }
 
-function sendJson(res, statusCode, payload) {
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
     "Access-Control-Allow-Methods": CORS_ALLOW_METHODS,
     "Access-Control-Allow-Headers": CORS_ALLOW_HEADERS,
+    ...extraHeaders,
   });
   res.end(JSON.stringify(payload));
 }
@@ -218,6 +234,210 @@ function sendText(res, statusCode, text, contentType = "text/plain") {
     "Access-Control-Allow-Headers": CORS_ALLOW_HEADERS,
   });
   res.end(text);
+}
+
+function hashAccessCode(rawCode) {
+  return crypto
+    .createHash("sha256")
+    .update(`${String(rawCode || "").trim()}|${AUTH_CODE_PEPPER}`, "utf8")
+    .digest("hex");
+}
+
+function secureCompareHex(left, right) {
+  const leftText = String(left || "");
+  const rightText = String(right || "");
+  if (!leftText || !rightText || leftText.length !== rightText.length) return false;
+  const leftBuf = Buffer.from(leftText, "utf8");
+  const rightBuf = Buffer.from(rightText, "utf8");
+  return crypto.timingSafeEqual(leftBuf, rightBuf);
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  const text = String(cookieHeader || "");
+  if (!text) return result;
+  text.split(";").forEach((chunk) => {
+    const index = chunk.indexOf("=");
+    if (index <= 0) return;
+    const key = chunk.slice(0, index).trim();
+    if (!key) return;
+    const value = chunk.slice(index + 1).trim();
+    result[key] = decodeURIComponent(value);
+  });
+  return result;
+}
+
+function isHttpsRequest(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").toLowerCase();
+  if (forwardedProto.includes("https")) return true;
+  if (req.socket && req.socket.encrypted) return true;
+  return false;
+}
+
+function shouldSetSecureCookie(req) {
+  if (AUTH_COOKIE_SECURE === "true" || AUTH_COOKIE_SECURE === "1") return true;
+  if (AUTH_COOKIE_SECURE === "false" || AUTH_COOKIE_SECURE === "0") return false;
+  return isHttpsRequest(req);
+}
+
+function buildSessionCookie(req, tokenValue, maxAgeMs) {
+  const parts = [
+    `${AUTH_COOKIE_NAME}=${encodeURIComponent(tokenValue)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${Math.max(0, Math.floor(maxAgeMs / 1000))}`,
+  ];
+  if (shouldSetSecureCookie(req)) {
+    parts.push("Secure");
+  }
+  return parts.join("; ");
+}
+
+function parseMemberExpiryMs(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.getTime();
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  const text = String(value || "").trim();
+  if (!text) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const parsed = new Date(`${text}T23:59:59+08:00`);
+    return parsed.getTime();
+  }
+  return new Date(text).getTime();
+}
+
+function normalizeMemberRecord(rawEntry) {
+  if (!rawEntry || typeof rawEntry !== "object") return null;
+  const memberId = String(
+    rawEntry.memberId || rawEntry.id || rawEntry.userId || rawEntry.uid || ""
+  ).trim();
+  if (!memberId) return null;
+
+  const status = String(rawEntry.status || "active").trim().toLowerCase();
+  const expiresAtMs = parseMemberExpiryMs(rawEntry.expiresAt || rawEntry.validUntil || rawEntry.expireAt);
+  const accessCodeHash = String(rawEntry.accessCodeHash || "").trim().toLowerCase();
+  const accessCodePlain = String(rawEntry.accessCode || "").trim();
+  const finalHash = accessCodeHash || (accessCodePlain ? hashAccessCode(accessCodePlain) : "");
+  if (!finalHash) return null;
+
+  return {
+    memberId,
+    displayName: String(rawEntry.displayName || rawEntry.name || "").trim(),
+    status,
+    expiresAtMs,
+    expiresAt: Number.isFinite(expiresAtMs) ? new Date(expiresAtMs).toISOString() : "",
+    accessCodeHash: finalHash,
+  };
+}
+
+function isMemberActive(member, nowMs = Date.now()) {
+  if (!member) return false;
+  if (member.status !== "active") return false;
+  if (!Number.isFinite(member.expiresAtMs)) return false;
+  return member.expiresAtMs >= nowMs;
+}
+
+async function ensureMemberStoreFile() {
+  await fsp.mkdir(ACCESS_CONTROL_DIR, { recursive: true });
+  try {
+    await fsp.access(MEMBER_STORE_PATH, fs.constants.F_OK);
+  } catch {
+    const seed = {
+      updatedAt: new Date().toISOString(),
+      members: [],
+    };
+    await fsp.writeFile(MEMBER_STORE_PATH, `${JSON.stringify(seed, null, 2)}\n`, "utf8");
+  }
+}
+
+async function loadMembersFromStore() {
+  await ensureMemberStoreFile();
+  const stat = await fsp.stat(MEMBER_STORE_PATH);
+  if (memberStoreCache.mtimeMs === stat.mtimeMs) {
+    return memberStoreCache.members;
+  }
+  let members = [];
+  try {
+    const rawText = await fsp.readFile(MEMBER_STORE_PATH, "utf8");
+    const parsed = rawText.trim() ? JSON.parse(rawText) : {};
+    members = Array.isArray(parsed.members)
+      ? parsed.members.map(normalizeMemberRecord).filter(Boolean)
+      : [];
+  } catch (error) {
+    console.error(`[auth] 会员文件解析失败，已回退为空列表：${error.message}`);
+    members = [];
+  }
+  memberStoreCache = {
+    mtimeMs: stat.mtimeMs,
+    members,
+  };
+  return members;
+}
+
+async function findMember(memberId) {
+  const normalized = String(memberId || "").trim();
+  if (!normalized) return null;
+  const members = await loadMembersFromStore();
+  return members.find((item) => item.memberId === normalized) || null;
+}
+
+function pruneExpiredSessions(nowMs = Date.now()) {
+  for (const [token, session] of authSessions.entries()) {
+    if (!session || !Number.isFinite(session.expiresAtMs) || session.expiresAtMs <= nowMs) {
+      authSessions.delete(token);
+    }
+  }
+}
+
+async function resolveMemberFromSession(req) {
+  if (!AUTH_ENABLED) return null;
+  pruneExpiredSessions();
+  const cookies = parseCookies(req.headers.cookie || "");
+  const token = String(cookies[AUTH_COOKIE_NAME] || "").trim();
+  if (!token) return null;
+  const session = authSessions.get(token);
+  if (!session) return null;
+  const member = await findMember(session.memberId);
+  if (!isMemberActive(member)) {
+    authSessions.delete(token);
+    return null;
+  }
+  return member;
+}
+
+function createSession(memberId) {
+  const entropy = `${crypto.randomBytes(24).toString("hex")}:${Date.now()}:${Math.random()}`;
+  const token = crypto.createHmac("sha256", AUTH_SESSION_SECRET).update(entropy).digest("hex");
+  authSessions.set(token, {
+    memberId,
+    createdAtMs: Date.now(),
+    expiresAtMs: Date.now() + AUTH_SESSION_TTL_MS,
+  });
+  return token;
+}
+
+function clearSessionByRequest(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  const token = String(cookies[AUTH_COOKIE_NAME] || "").trim();
+  if (!token) return;
+  authSessions.delete(token);
+}
+
+function isPublicAuthRoute(pathname) {
+  return pathname === "/login.html" || pathname === "/api/auth/login" || pathname === "/api/auth/me";
+}
+
+function redirectToLogin(res, nextPath) {
+  const encodedNext = encodeURIComponent(nextPath || "/");
+  res.writeHead(302, {
+    Location: `/login.html?next=${encodedNext}`,
+    "Cache-Control": "no-store",
+  });
+  res.end();
 }
 
 function parseIsoDate(isoDate) {
@@ -1241,6 +1461,88 @@ async function readRequestBody(req) {
   });
 }
 
+async function handleAuthMe(req, res) {
+  if (!AUTH_ENABLED) {
+    sendJson(res, 200, { enabled: false, authenticated: true });
+    return;
+  }
+  const member = await resolveMemberFromSession(req);
+  if (!member) {
+    sendJson(res, 401, { enabled: true, authenticated: false, error: "请先登录星球会员账号" });
+    return;
+  }
+  sendJson(res, 200, {
+    enabled: true,
+    authenticated: true,
+    member: {
+      memberId: member.memberId,
+      displayName: member.displayName || member.memberId,
+      expiresAt: member.expiresAt,
+    },
+  });
+}
+
+async function handleAuthLogin(req, res) {
+  if (!AUTH_ENABLED) {
+    sendJson(res, 200, { ok: true, enabled: false });
+    return;
+  }
+
+  try {
+    const bodyText = await readRequestBody(req);
+    const payload = bodyText ? JSON.parse(bodyText) : {};
+    const memberId = String(payload.memberId || "").trim();
+    const accessCode = String(payload.accessCode || "").trim();
+    if (!memberId || !accessCode) {
+      sendJson(res, 400, { error: "请输入会员ID与访问码" });
+      return;
+    }
+
+    const member = await findMember(memberId);
+    if (!member || !isMemberActive(member)) {
+      sendJson(res, 403, { error: "会员不存在或已过有效期" });
+      return;
+    }
+
+    const providedHash = hashAccessCode(accessCode);
+    if (!secureCompareHex(providedHash, member.accessCodeHash)) {
+      sendJson(res, 401, { error: "访问码错误" });
+      return;
+    }
+
+    const token = createSession(member.memberId);
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        member: {
+          memberId: member.memberId,
+          displayName: member.displayName || member.memberId,
+          expiresAt: member.expiresAt,
+        },
+      },
+      {
+        "Set-Cookie": buildSessionCookie(req, token, AUTH_SESSION_TTL_MS),
+      }
+    );
+  } catch (error) {
+    sendJson(res, 400, { error: `登录请求无效：${error.message}` });
+  }
+}
+
+function handleAuthLogout(req, res) {
+  clearSessionByRequest(req);
+  sendJson(
+    res,
+    200,
+    { ok: true },
+    {
+      "Set-Cookie": buildSessionCookie(req, "", 0),
+    }
+  );
+}
+
 async function handleMeta(res, urlObj) {
   try {
     const requestedReturnMode = normalizeReturnMode(urlObj.searchParams.get("returnMode"));
@@ -1416,6 +1718,7 @@ function serveStatic(urlPath, res) {
 function createServer() {
   return http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+    const pathname = urlObj.pathname || "/";
 
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
@@ -1427,18 +1730,58 @@ function createServer() {
       return;
     }
 
-    if (req.method === "GET" && urlObj.pathname === "/api/meta") {
+    if (req.method === "GET" && pathname === "/api/auth/me") {
+      await handleAuthMe(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/auth/login") {
+      await handleAuthLogin(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/auth/logout") {
+      handleAuthLogout(req, res);
+      return;
+    }
+
+    if (AUTH_ENABLED) {
+      if (req.method === "GET" && pathname === "/login.html") {
+        const member = await resolveMemberFromSession(req);
+        if (member) {
+          res.writeHead(302, { Location: "/" });
+          res.end();
+          return;
+        }
+      } else if (!isPublicAuthRoute(pathname)) {
+        const member = await resolveMemberFromSession(req);
+        if (!member) {
+          if (pathname.startsWith("/api/")) {
+            sendJson(res, 401, { error: "请先登录星球会员账号" });
+            return;
+          }
+          if (req.method === "GET") {
+            redirectToLogin(res, `${pathname}${urlObj.search || ""}`);
+            return;
+          }
+          sendText(res, 401, "Unauthorized");
+          return;
+        }
+      }
+    }
+
+    if (req.method === "GET" && pathname === "/api/meta") {
       await handleMeta(res, urlObj);
       return;
     }
 
-    if (req.method === "POST" && urlObj.pathname === "/api/simulate") {
+    if (req.method === "POST" && pathname === "/api/simulate") {
       await handleSimulate(req, res);
       return;
     }
 
     if (req.method === "GET") {
-      serveStatic(urlObj.pathname, res);
+      serveStatic(pathname, res);
       return;
     }
 
@@ -1486,6 +1829,9 @@ async function warmupLocalCache() {
 }
 
 async function start() {
+  if (AUTH_ENABLED) {
+    await ensureMemberStoreFile();
+  }
   await warmupLocalCache();
   scheduleAutoRefresh();
   const server = createServer();
@@ -1494,6 +1840,16 @@ async function start() {
     console.log(
       `[data] 自动刷新已启用：interval=${BACKGROUND_REFRESH_INTERVAL_MS}ms, requestFreshWindow=${REQUEST_FRESH_WINDOW_MS}ms`
     );
+    if (AUTH_ENABLED) {
+      console.log(`[auth] 会员门槛已启用，会员文件：${MEMBER_STORE_PATH}`);
+      if (!process.env.AUTH_SESSION_SECRET) {
+        console.warn(
+          "[auth] 未设置 AUTH_SESSION_SECRET，当前会话密钥为临时值。重启后所有登录会话会失效。"
+        );
+      }
+    } else {
+      console.log("[auth] 会员门槛未启用（AUTH_ENABLED=false）");
+    }
   });
 }
 
