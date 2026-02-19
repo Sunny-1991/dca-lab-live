@@ -8,9 +8,9 @@
   "isEstimated": false,
   "provider": "Stooq",
   "sourceUrl": "https://stooq.com/q/d/l/?s=spy.us&i=d",
-  "fetchedAt": "2026-02-19T08:04:30.108Z",
+  "fetchedAt": "2026-02-19T15:10:45.921Z",
   "earliestDate": "2005-02-25",
-  "latestDate": "2026-02-18",
+  "latestDate": "2026-02-19",
   "rows": [
     [
       "2005-02-25",
@@ -21119,6 +21119,10 @@
     [
       "2026-02-18",
       686.29
+    ],
+    [
+      "2026-02-19",
+      685.18
     ]
   ]
 }

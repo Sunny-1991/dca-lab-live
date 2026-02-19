@@ -8,9 +8,9 @@
   "isEstimated": false,
   "provider": "Stooq",
   "sourceUrl": "https://stooq.com/q/d/l/?s=%5Espx&i=d",
-  "fetchedAt": "2026-02-19T08:04:29.890Z",
+  "fetchedAt": "2026-02-19T15:10:45.680Z",
   "earliestDate": "1985-01-02",
-  "latestDate": "2026-02-18",
+  "latestDate": "2026-02-19",
   "rows": [
     [
       "1985-01-02",
@@ -41459,6 +41459,10 @@
     [
       "2026-02-18",
       6881.31
+    ],
+    [
+      "2026-02-19",
+      6864.26
     ]
   ]
 }
