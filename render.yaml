@@ -11,7 +11,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: AUTH_ENABLED
-        value: true
+        value: false
       - key: AUTH_COOKIE_SECURE
         value: auto
       - key: AUTH_SESSION_TTL_MS
