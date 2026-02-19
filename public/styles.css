@@ -143,58 +143,76 @@ h2 {
 }
 
 .control-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 14px;
-  padding-bottom: 11px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 14px;
   border-bottom: 1px solid rgba(123, 139, 160, 0.3);
 }
 
 .control-head-main {
   min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.control-head-main h2 {
+  margin: 0;
+}
+
+.control-head-main p {
+  margin: 0;
+  max-width: 62ch;
+  color: #586b87;
+  font-size: 0.92rem;
+  line-height: 1.55;
 }
 
 .section-tag {
   margin: 0;
   display: inline-flex;
   align-items: center;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid rgba(118, 136, 161, 0.32);
   background: rgba(240, 244, 251, 0.95);
   color: #54657f;
-  font: 700 0.66rem / 1.2 var(--font-display);
-  letter-spacing: 0.1em;
+  font: 700 0.56rem / 1.1 var(--font-display);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  width: fit-content;
+  margin-bottom: 8px;
 }
 
 .control-head-meta {
-  min-width: 248px;
+  min-width: 268px;
   display: grid;
-  gap: 7px;
-  padding: 9px 10px;
-  border: 1px solid rgba(118, 136, 161, 0.28);
-  border-radius: 10px;
-  background: #fbfcff;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
 }
 
 .control-head-meta p {
   margin: 0;
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 0.78rem;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid rgba(118, 136, 161, 0.24);
+  border-radius: 9px;
+  background: #f7faff;
+  font-size: 0.74rem;
   color: #5d6f88;
 }
 
 .control-head-meta span {
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
 }
 
 .control-head-meta strong {
   color: #1f2937;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 700;
 }
 
@@ -744,8 +762,9 @@ button:disabled {
   }
 
   .control-head {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 12px;
   }
 
   .control-head-meta {
@@ -808,6 +827,11 @@ button:disabled {
 
   .control-head-meta {
     grid-template-columns: 1fr;
+  }
+
+  .control-head-main p {
+    max-width: none;
+    font-size: 0.88rem;
   }
 
   .field-date {
