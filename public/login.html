@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>会员登录 - 复利实验室</title>
+    <style>
+      :root {
+        --bg: #f3f7ff;
+        --card: #ffffff;
+        --ink: #10213b;
+        --soft: #5d6d85;
+        --line: rgba(120, 138, 165, 0.32);
+        --brand: #2b63ff;
+        --brand-strong: #1f4ee6;
+        --error: #c53939;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(rgba(37, 63, 108, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(37, 63, 108, 0.04) 1px, transparent 1px),
+          linear-gradient(180deg, #f7f9ff 0%, var(--bg) 100%);
+        background-size:
+          30px 30px,
+          30px 30px,
+          100% 100%;
+      }
+
+      .card {
+        width: min(430px, 100%);
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: var(--card);
+        box-shadow: 0 12px 28px rgba(20, 38, 71, 0.1);
+        padding: 24px;
+      }
+
+      .tag {
+        margin: 0;
+        width: fit-content;
+        border-radius: 999px;
+        border: 1px solid rgba(120, 138, 165, 0.45);
+        background: rgba(236, 242, 255, 0.85);
+        color: #4c5e7c;
+        font-size: 0.66rem;
+        letter-spacing: 0.13em;
+        font-weight: 700;
+        padding: 4px 10px;
+      }
+
+      h1 {
+        margin: 12px 0 6px;
+        font-size: 1.65rem;
+        line-height: 1.2;
+      }
+
+      .desc {
+        margin: 0;
+        color: var(--soft);
+        font-size: 0.92rem;
+        line-height: 1.6;
+      }
+
+      form {
+        margin-top: 20px;
+        display: grid;
+        gap: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.84rem;
+        color: #4f607c;
+        font-weight: 600;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid rgba(120, 138, 165, 0.45);
+        border-radius: 10px;
+        padding: 11px 12px;
+        font-size: 0.94rem;
+        color: var(--ink);
+        background: #fcfdff;
+      }
+
+      input:focus-visible {
+        outline: 2px solid rgba(43, 99, 255, 0.28);
+        outline-offset: 2px;
+      }
+
+      button {
+        margin-top: 4px;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: var(--brand);
+        color: #fff;
+        font-size: 0.94rem;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 8px 18px rgba(43, 99, 255, 0.32);
+      }
+
+      button:hover {
+        background: var(--brand-strong);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .hint {
+        margin: 10px 0 0;
+        color: var(--soft);
+        font-size: 0.8rem;
+        line-height: 1.5;
+      }
+
+      .status {
+        min-height: 1.4em;
+        margin: 8px 0 0;
+        font-size: 0.85rem;
+        color: var(--soft);
+      }
+
+      .status.error {
+        color: var(--error);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <p class="tag">MEMBER ACCESS</p>
+      <h1>会员登录</h1>
+      <p class="desc">仅限你的知识星球有效期会员访问。请输入会员ID和访问码。</p>
+
+      <form id="loginForm">
+        <label>
+          会员ID
+          <input id="memberIdInput" name="memberId" type="text" autocomplete="username" required />
+        </label>
+        <label>
+          访问码
+          <input
+            id="accessCodeInput"
+            name="accessCode"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <button id="submitBtn" type="submit">进入复利实验室</button>
+      </form>
+
+      <p class="status" id="statusText"></p>
+      <p class="hint">
+        提示：访问码建议按会员有效期定期轮换。过期会员将自动失去访问权限。
+      </p>
+    </main>
+
+    <script>
+      const form = document.getElementById("loginForm");
+      const memberIdInput = document.getElementById("memberIdInput");
+      const accessCodeInput = document.getElementById("accessCodeInput");
+      const submitBtn = document.getElementById("submitBtn");
+      const statusText = document.getElementById("statusText");
+
+      function setStatus(message, isError = false) {
+        statusText.textContent = message || "";
+        statusText.classList.toggle("error", Boolean(isError));
+      }
+
+      function getNextPath() {
+        const url = new URL(window.location.href);
+        const next = url.searchParams.get("next") || "/";
+        if (!next.startsWith("/")) return "/";
+        return next;
+      }
+
+      async function parseJsonOrThrow(response) {
+        const text = await response.text();
+        let payload = {};
+        try {
+          payload = text ? JSON.parse(text) : {};
+        } catch {
+          throw new Error("接口返回非 JSON，请检查后端服务。");
+        }
+        if (!response.ok) {
+          throw new Error(payload.error || `请求失败（HTTP ${response.status}）`);
+        }
+        return payload;
+      }
+
+      async function checkAuthStatus() {
+        try {
+          const response = await fetch("/api/auth/me", {
+            method: "GET",
+            credentials: "include",
+          });
+          if (response.status === 401) return;
+          const payload = await parseJsonOrThrow(response);
+          if (payload.enabled === false || payload.authenticated) {
+            window.location.replace(getNextPath());
+          }
+        } catch {
+          setStatus("无法连接后端服务，请稍后重试。", true);
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const memberId = memberIdInput.value.trim();
+        const accessCode = accessCodeInput.value.trim();
+        if (!memberId || !accessCode) {
+          setStatus("请完整填写会员ID和访问码。", true);
+          return;
+        }
+
+        submitBtn.disabled = true;
+        setStatus("正在验证会员资格...");
+
+        try {
+          const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include",
+            body: JSON.stringify({ memberId, accessCode }),
+          });
+          await parseJsonOrThrow(response);
+          setStatus("验证通过，正在进入...");
+          window.location.replace(getNextPath());
+        } catch (error) {
+          setStatus(error.message || "登录失败，请重试。", true);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+
+      checkAuthStatus();
+    </script>
+  </body>
+</html>
