@@ -151,6 +151,27 @@ node scripts/manage-members.mjs upsert --member-id 10001 --expires-at 2028-01-31
 
 ---
 
+## 可立即发的上线方案（无需买域名）
+
+目标：你只发一个链接，用户打开后先走会员门槛，再进入主页面。
+
+### 推荐部署方式：Render 免费子域名（同域前后端）
+
+1. 在 Render 选择 `New +` -> `Blueprint`
+2. 连接该 GitHub 仓库，使用仓库内 `render.yaml`
+3. 在 Render 环境变量里设置：
+   - `AUTH_SESSION_SECRET`（必须，随机长字符串）
+   - `AUTH_CODE_PEPPER`（建议）
+4. 部署完成后会得到：`https://<你的服务名>.onrender.com`
+5. 发给读者的入口链接：
+   - `https://<你的服务名>.onrender.com/login.html`
+
+### 为什么不建议把登录入口放在 GitHub Pages
+
+- GitHub Pages 只有静态托管，没有后端会话
+- 会员鉴权依赖 `/api/auth/*`，必须由后端提供
+- 所以正式入口应使用 Render 子域名，而非 `github.io` 页面
+
 ## 本地开发
 
 ### 1) 启动后端
@@ -209,6 +230,7 @@ node scripts/manage-members.mjs remove --member-id 10001
 
 ## API（后端模式下）
 
+- `GET /healthz`：部署平台探活（无需登录）
 - `GET /api/meta`：返回资产可用区间、数据源信息
 - `POST /api/simulate`：执行回测并返回图表/指标数据
 - `GET /api/auth/me`：查询当前登录态
