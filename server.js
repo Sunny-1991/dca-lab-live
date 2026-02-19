@@ -428,7 +428,12 @@ function clearSessionByRequest(req) {
 }
 
 function isPublicAuthRoute(pathname) {
-  return pathname === "/login.html" || pathname === "/api/auth/login" || pathname === "/api/auth/me";
+  return (
+    pathname === "/login.html" ||
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/me" ||
+    pathname === "/healthz"
+  );
 }
 
 function redirectToLogin(res, nextPath) {
@@ -438,6 +443,15 @@ function redirectToLogin(res, nextPath) {
     "Cache-Control": "no-store",
   });
   res.end();
+}
+
+function handleHealthz(res) {
+  sendJson(res, 200, {
+    ok: true,
+    service: "dca-lab",
+    authEnabled: AUTH_ENABLED,
+    now: new Date().toISOString(),
+  });
 }
 
 function parseIsoDate(isoDate) {
@@ -1742,6 +1756,11 @@ function createServer() {
 
     if (req.method === "POST" && pathname === "/api/auth/logout") {
       handleAuthLogout(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/healthz") {
+      handleHealthz(res);
       return;
     }
 
