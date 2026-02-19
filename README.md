@@ -197,10 +197,13 @@ node scripts/fetch-market-data.mjs
 ```bash
 node scripts/manage-members.mjs list
 node scripts/manage-members.mjs upsert --member-id 10001 --name 张三 --expires-at 2027-01-31 --access-code your_code_here
+node scripts/manage-members.mjs import-csv --file ./members.csv
 node scripts/manage-members.mjs remove --member-id 10001
 ```
 
 会员数据文件：`data/access-control/members.json`
+
+`import-csv` 需要列名：`member_id,name,expires_at,access_code,status`（其中 `status` 可选，默认 `active`）。
 
 ---
 
