@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: dca-lab-api
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: ""
+    startCommand: node server.js
+    healthCheckPath: /api/meta
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORS_ALLOW_ORIGIN
+        value: https://sunny-1991.github.io

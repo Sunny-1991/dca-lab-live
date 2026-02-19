@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>复利实验室</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script defer src="config.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <div class="bg-orb orb-left"></div>
+    <div class="bg-orb orb-right"></div>
+
+    <main class="layout">
+      <header class="panel hero reveal">
+        <p class="kicker">DCA + Compounding Studio</p>
+        <h1>复利实验室</h1>
+        <p class="hero-copy">
+          选择标普500或纳斯达克100，设置开始时间、定投频率、单次金额，快速生成资产曲线，并查看最大回撤与恢复时间。
+        </p>
+      </header>
+
+      <section class="panel controls reveal">
+        <div class="section-head control-head">
+          <div class="control-head-main">
+            <p class="section-tag">STRATEGY CONFIG</p>
+            <h2>回测参数</h2>
+            <p>数据使用各指数交易日收盘价，后端会本地缓存，保证后续加载速度。</p>
+          </div>
+          <div class="control-head-meta">
+            <p><span>回测框架</span><strong>DCA 定投</strong></p>
+            <p><span>估值频率</span><strong>交易日收盘</strong></p>
+          </div>
+        </div>
+
+        <div class="control-grid">
+          <fieldset class="field field-asset">
+            <legend>定投资产（可对比 2 个）</legend>
+            <label class="choice-row">
+              <input type="checkbox" name="asset" value="sp500" checked />
+              <span>标普500（S&amp;P 500）</span>
+            </label>
+            <label class="choice-row">
+              <input type="checkbox" name="asset" value="nasdaq100" />
+              <span>纳斯达克100（Nasdaq-100）</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="field field-frequency">
+            <legend>定投频率</legend>
+            <div class="pill-group">
+              <label class="choice-pill">
+                <input type="radio" name="frequency" value="monthly" checked />
+                <span>每月</span>
+              </label>
+              <label class="choice-pill">
+                <input type="radio" name="frequency" value="weekly" />
+                <span>每周</span>
+              </label>
+              <label class="choice-pill">
+                <input type="radio" name="frequency" value="daily" />
+                <span>每个交易日</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="field field-precision">
+            <legend>图表数据精度</legend>
+            <div class="pill-group">
+              <label class="choice-pill">
+                <input type="radio" name="precision" value="monthly" checked />
+                <span>月度</span>
+              </label>
+              <label class="choice-pill">
+                <input type="radio" name="precision" value="weekly" />
+                <span>周度</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="field field-mode">
+            <legend>回测口径</legend>
+            <div class="pill-group">
+              <label class="choice-pill">
+                <input type="radio" name="returnMode" value="total_return" checked />
+                <span>全收益（分红再投资）</span>
+              </label>
+              <label class="choice-pill">
+                <input type="radio" name="returnMode" value="price" />
+                <span>价格收益（不含分红）</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <label class="field input-field date-field field-date" for="startDateInput">
+            <span>定投开始日期</span>
+            <div class="date-input-row">
+              <input id="startDateInput" type="date" required />
+              <button id="openDatePickerBtn" class="date-open-btn" type="button">打开日历</button>
+            </div>
+            <p id="dateBoundHint" class="date-hint">可选区间：-</p>
+            <div class="date-quick-row">
+              <button class="date-quick-btn" type="button" data-date-action="earliest">最早</button>
+              <button class="date-quick-btn" type="button" data-date-action="y1">近1年</button>
+              <button class="date-quick-btn" type="button" data-date-action="y3">近3年</button>
+              <button class="date-quick-btn" type="button" data-date-action="y5">近5年</button>
+              <button class="date-quick-btn" type="button" data-date-action="y10">近10年</button>
+              <button class="date-quick-btn" type="button" data-date-action="y15">近15年</button>
+              <button class="date-quick-btn" type="button" data-date-action="y20">近20年</button>
+            </div>
+          </label>
+
+          <label class="field input-field field-amount" for="amountInput">
+            <span>单次定投金额（USD）</span>
+            <input id="amountInput" type="number" min="1" step="1" value="500" required />
+          </label>
+        </div>
+
+        <div class="control-actions">
+          <button id="simulateBtn" type="button" disabled>生成资产走势</button>
+          <p id="statusText" class="status-text">正在初始化数据...</p>
+        </div>
+      </section>
+
+      <section class="analysis-shell reveal">
+        <section class="panel chart-panel">
+          <div class="section-head chart-head">
+            <div>
+              <h2>累计资产</h2>
+              <p>
+                曲线中浅色面积为本金，深色增量为增值。
+              </p>
+            </div>
+            <div class="chart-tools">
+              <p id="rangeWindowText" class="range-window-text">显示区间：-</p>
+              <button id="resetRangeBtn" class="ghost-btn" type="button">重置全区间</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <div class="chart-canvas-wrap">
+              <canvas id="equityChart" aria-label="定投累计资产"></canvas>
+            </div>
+            <div class="axis-range-overlay" id="timeSliderAligned">
+              <div class="time-slider-track" id="timeSliderTrack">
+                <input id="rangeStartInput" type="range" min="0" max="0" value="0" step="1" />
+                <input id="rangeEndInput" type="range" min="0" max="0" value="0" step="1" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel result">
+          <div class="section-head">
+            <h2>结果概览</h2>
+            <p id="rangeText">-</p>
+          </div>
+          <div id="summaryCards" class="summary-grid"></div>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>
