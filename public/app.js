@@ -962,14 +962,23 @@ async function parseJsonOrThrow(response) {
   try {
     payload = text ? JSON.parse(text) : {};
   } catch (error) {
-    throw new Error(`接口返回非 JSON 内容（HTTP ${response.status}）`);
+    const parseErr = new Error(`接口返回非 JSON 内容（HTTP ${response.status}）`);
+    parseErr.httpStatus = response.status;
+    throw parseErr;
   }
 
   if (!response.ok) {
-    throw new Error(payload.error || `接口异常（HTTP ${response.status}）`);
+    const apiErr = new Error(payload.error || `接口异常（HTTP ${response.status}）`);
+    apiErr.httpStatus = response.status;
+    throw apiErr;
   }
 
   return payload;
+}
+
+function redirectToLoginPage() {
+  const next = `${window.location.pathname}${window.location.search}`;
+  window.location.href = `/login.html?next=${encodeURIComponent(next)}`;
 }
 
 async function runSimulation() {
@@ -1011,6 +1020,7 @@ async function runSimulation() {
       try {
         const response = await fetch(buildApiUrl("/api/simulate"), {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
           },
@@ -1018,6 +1028,10 @@ async function runSimulation() {
         });
         payload = await parseJsonOrThrow(response);
       } catch (apiError) {
+        if (apiError && apiError.httpStatus === 401) {
+          redirectToLoginPage();
+          return;
+        }
         payload = await simulateFromLocal(requestPayload);
         state.dataSourceMode = "local";
         state.metaWarnings = [];
@@ -1052,19 +1066,26 @@ async function loadMeta() {
   if (!runtimeApiBase && isGithubPagesRuntime()) {
     payload = await loadMetaFromLocal(returnMode);
     state.dataSourceMode = "local";
-  } else {
-    try {
-      const response = await fetch(
-        buildApiUrl(`/api/meta?returnMode=${encodeURIComponent(returnMode)}`)
-      );
-      payload = await parseJsonOrThrow(response);
-      state.dataSourceMode = "api";
-    } catch (apiError) {
-      payload = await loadMetaFromLocal(returnMode);
-      state.dataSourceMode = "local";
-      payload.warnings = filterVisibleWarnings(payload.warnings);
+    } else {
+      try {
+        const response = await fetch(
+        buildApiUrl(`/api/meta?returnMode=${encodeURIComponent(returnMode)}`),
+        {
+          credentials: "include",
+        }
+        );
+        payload = await parseJsonOrThrow(response);
+        state.dataSourceMode = "api";
+      } catch (apiError) {
+        if (apiError && apiError.httpStatus === 401) {
+          redirectToLoginPage();
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        payload = await loadMetaFromLocal(returnMode);
+        state.dataSourceMode = "local";
+        payload.warnings = filterVisibleWarnings(payload.warnings);
+      }
     }
-  }
 
   if (!Array.isArray(payload.assets) || payload.assets.length === 0) {
     throw new Error("元数据为空");
