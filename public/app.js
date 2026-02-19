@@ -67,7 +67,20 @@ const state = {
   metaWarnings: [],
   chart: null,
   chartSource: null,
+  dataSourceMode: "api",
+  localSeriesCache: new Map(),
 };
+
+const ALL_ASSET_IDS = ["sp500", "nasdaq100"];
+
+function isGithubPagesRuntime() {
+  return window.location.hostname.endsWith("github.io");
+}
+
+function localDataPath(assetId, returnMode) {
+  const suffix = returnMode === "total_return" ? ".total_return" : "";
+  return `data/market-cache/${assetId}${suffix}.json`;
+}
 
 function setStatus(message, type = "info") {
   statusText.textContent = message;
@@ -225,6 +238,378 @@ function updateStartDateBounds() {
     dateBoundHint.textContent = hintBase;
   }
   refreshDateQuickButtonState();
+}
+
+function normalizeRows(rawRows) {
+  if (!Array.isArray(rawRows)) return [];
+  return rawRows
+    .map((row) => {
+      if (!Array.isArray(row) || row.length < 2) return null;
+      const [date, close] = row;
+      if (typeof date !== "string" || !Number.isFinite(close) || close <= 0) return null;
+      return {
+        date,
+        close,
+        dateObj: parseIsoDate(date),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+async function loadLocalAssetSeries(assetId, returnMode) {
+  const cacheKey = `${assetId}:${returnMode}`;
+  if (state.localSeriesCache.has(cacheKey)) {
+    return state.localSeriesCache.get(cacheKey);
+  }
+
+  const response = await fetch(localDataPath(assetId, returnMode), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`本地数据加载失败：${assetId} ${formatReturnModeLabel(returnMode)}（HTTP ${response.status}）`);
+  }
+
+  const payload = await response.json();
+  const rows = normalizeRows(payload.rows);
+  const parsed = {
+    ...payload,
+    rows,
+    earliestDate: rows[0]?.date || payload.earliestDate,
+    latestDate: rows[rows.length - 1]?.date || payload.latestDate,
+  };
+  state.localSeriesCache.set(cacheKey, parsed);
+  return parsed;
+}
+
+async function loadMetaFromLocal(returnMode) {
+  const assets = await Promise.all(
+    ALL_ASSET_IDS.map((assetId) => loadLocalAssetSeries(assetId, returnMode))
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    request: {
+      returnMode,
+      sourceMode: "local",
+    },
+    assets: assets.map((asset) => ({
+      id: asset.assetId,
+      name: asset.assetName,
+      symbol: asset.symbol,
+      requestedReturnMode: asset.requestedReturnMode || returnMode,
+      resolvedReturnMode: asset.resolvedReturnMode || returnMode,
+      isProxy: Boolean(asset.isProxy),
+      isEstimated: Boolean(asset.isEstimated),
+      earliestDate: asset.earliestDate,
+      latestDate: asset.latestDate,
+      provider: asset.provider || "Local Cache",
+      fetchedAt: asset.fetchedAt || null,
+    })),
+    warnings: [],
+    source: "本地静态数据（GitHub Pages 模式）",
+  };
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+function addOneMonth(dateObj, anchorDay) {
+  const year = dateObj.getUTCFullYear();
+  const monthIndex = dateObj.getUTCMonth();
+  const nextMonthIndex = monthIndex + 1;
+  const targetYear = year + Math.floor(nextMonthIndex / 12);
+  const targetMonth = nextMonthIndex % 12;
+  const targetDay = Math.min(anchorDay, daysInMonth(targetYear, targetMonth));
+  return new Date(Date.UTC(targetYear, targetMonth, targetDay));
+}
+
+function nextContributionDate(currentDate, frequency, anchorDay) {
+  if (frequency === "weekly") {
+    return new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+  if (frequency === "monthly") {
+    return addOneMonth(currentDate, anchorDay);
+  }
+  return new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
+}
+
+function differenceInDays(startDateObj, endDateObj) {
+  const diffMs = endDateObj.getTime() - startDateObj.getTime();
+  return Math.max(0, Math.round(diffMs / (24 * 60 * 60 * 1000)));
+}
+
+function stdDev(values) {
+  if (!Array.isArray(values) || values.length < 2) return 0;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance =
+    values.reduce((sum, value) => {
+      const delta = value - mean;
+      return sum + delta * delta;
+    }, 0) /
+    (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+function isoWeekKey(dateObj) {
+  const temp = new Date(
+    Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate())
+  );
+  const day = temp.getUTCDay() || 7;
+  temp.setUTCDate(temp.getUTCDate() + 4 - day);
+
+  const yearStart = new Date(Date.UTC(temp.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((temp - yearStart) / 86400000 + 1) / 7);
+  const week = String(weekNo).padStart(2, "0");
+  return `${temp.getUTCFullYear()}-W${week}`;
+}
+
+function aggregateSnapshots(dailyRows, precision) {
+  if (!Array.isArray(dailyRows) || dailyRows.length === 0) return [];
+  const toSnapshot = (row) => ({
+    periodKey: precision === "weekly" ? isoWeekKey(row.dateObj) : row.date.slice(0, 7),
+    date: row.date,
+    totalInvested: row.totalInvested,
+    accountValue: row.accountValue,
+    profitLoss: row.profitLoss,
+    totalReturnPct: row.totalReturnPct,
+    drawdownPct: row.drawdownPct,
+  });
+
+  const bucket = new Map();
+  dailyRows.forEach((row) => {
+    const key = precision === "weekly" ? isoWeekKey(row.dateObj) : row.date.slice(0, 7);
+    bucket.set(key, toSnapshot(row));
+  });
+
+  const snapshots = Array.from(bucket.values());
+  const first = toSnapshot(dailyRows[0]);
+  if (snapshots.length === 0 || snapshots[0].date !== first.date) {
+    snapshots.unshift(first);
+  }
+  return snapshots;
+}
+
+function simulateDcaLocal(seriesRows, params) {
+  const { startDateIso, endDateIso, frequency, amount, precision } = params;
+  const startDateObj = parseIsoDate(startDateIso);
+  const endDateObj = parseIsoDate(endDateIso);
+  const firstDate = seriesRows[0].dateObj;
+  const lastDate = seriesRows[seriesRows.length - 1].dateObj;
+
+  if (startDateObj > lastDate) {
+    throw new Error("开始日期晚于可用行情结束日");
+  }
+
+  const effectiveStartDateObj = startDateObj > firstDate ? startDateObj : firstDate;
+  const effectiveEndDateObj = endDateObj < lastDate ? endDateObj : lastDate;
+  if (effectiveStartDateObj > effectiveEndDateObj) {
+    throw new Error("有效回测区间为空");
+  }
+
+  const usableRows = seriesRows.filter(
+    (row) => row.dateObj >= effectiveStartDateObj && row.dateObj <= effectiveEndDateObj
+  );
+  if (usableRows.length === 0) {
+    throw new Error("开始日期之后没有可用交易日");
+  }
+
+  let shares = 0;
+  let totalInvested = 0;
+  let totalContributionCount = 0;
+  let highWatermark = 0;
+  let highWatermarkIndex = 0;
+  let maxDrawdownPct = 0;
+  let maxDrawdownPeakIndex = 0;
+  let maxDrawdownTroughIndex = -1;
+
+  let scheduleDate = effectiveStartDateObj;
+  const monthlyAnchorDay = effectiveStartDateObj.getUTCDate();
+  const dailyRows = [];
+
+  usableRows.forEach((row) => {
+    let contributionCount = 0;
+    if (frequency === "daily") {
+      contributionCount = 1;
+    } else {
+      while (row.dateObj >= scheduleDate) {
+        contributionCount += 1;
+        scheduleDate = nextContributionDate(scheduleDate, frequency, monthlyAnchorDay);
+      }
+    }
+
+    if (contributionCount > 0) {
+      const contributionValue = amount * contributionCount;
+      shares += contributionValue / row.close;
+      totalInvested += contributionValue;
+      totalContributionCount += contributionCount;
+    }
+
+    const accountValue = shares * row.close;
+    if (accountValue > highWatermark) {
+      highWatermark = accountValue;
+      highWatermarkIndex = dailyRows.length;
+    }
+
+    const drawdownPct = highWatermark > 0 ? ((accountValue - highWatermark) / highWatermark) * 100 : 0;
+    if (drawdownPct < maxDrawdownPct) {
+      maxDrawdownPct = drawdownPct;
+      maxDrawdownPeakIndex = highWatermarkIndex;
+      maxDrawdownTroughIndex = dailyRows.length;
+    }
+
+    const profitLoss = accountValue - totalInvested;
+    const totalReturnPct = totalInvested > 0 ? (profitLoss / totalInvested) * 100 : 0;
+
+    dailyRows.push({
+      date: row.date,
+      dateObj: row.dateObj,
+      close: row.close,
+      contributionCount,
+      totalInvested,
+      accountValue,
+      profitLoss,
+      totalReturnPct,
+      drawdownPct,
+    });
+  });
+
+  const ending = dailyRows[dailyRows.length - 1];
+  const snapshots = aggregateSnapshots(dailyRows, precision);
+
+  let drawdownPeakDate = null;
+  let drawdownTroughDate = null;
+  let drawdownRecoveryDate = null;
+  let drawdownRecoveryDays = null;
+  let drawdownPeakToRecoveryDays = null;
+
+  if (maxDrawdownTroughIndex >= 0) {
+    drawdownPeakDate = dailyRows[maxDrawdownPeakIndex]?.date || null;
+    drawdownTroughDate = dailyRows[maxDrawdownTroughIndex]?.date || null;
+    const recoveryTarget = dailyRows[maxDrawdownPeakIndex]?.accountValue || 0;
+
+    let recoveryIndex = -1;
+    for (let idx = maxDrawdownTroughIndex + 1; idx < dailyRows.length; idx += 1) {
+      if (dailyRows[idx].accountValue >= recoveryTarget) {
+        recoveryIndex = idx;
+        break;
+      }
+    }
+
+    if (recoveryIndex >= 0) {
+      drawdownRecoveryDate = dailyRows[recoveryIndex].date;
+      drawdownRecoveryDays = differenceInDays(
+        dailyRows[maxDrawdownTroughIndex].dateObj,
+        dailyRows[recoveryIndex].dateObj
+      );
+      drawdownPeakToRecoveryDays = differenceInDays(
+        dailyRows[maxDrawdownPeakIndex].dateObj,
+        dailyRows[recoveryIndex].dateObj
+      );
+    }
+  }
+
+  const dailyReturns = [];
+  for (let i = 1; i < dailyRows.length; i += 1) {
+    const prev = dailyRows[i - 1].accountValue;
+    if (prev > 0) {
+      dailyReturns.push((dailyRows[i].accountValue - prev) / prev);
+    }
+  }
+  const volatility = stdDev(dailyReturns) * Math.sqrt(252) * 100;
+
+  return {
+    effectiveStartDate: toIsoDate(effectiveStartDateObj),
+    endDate: ending.date,
+    snapshots,
+    summary: {
+      totalContributions: totalContributionCount,
+      totalInvested: ending.totalInvested,
+      endingValue: ending.accountValue,
+      profitLoss: ending.profitLoss,
+      totalReturnPct: ending.totalReturnPct,
+      maxDrawdownPct,
+      maxDrawdownPeakDate: drawdownPeakDate,
+      maxDrawdownTroughDate: drawdownTroughDate,
+      drawdownRecoveryDate,
+      drawdownRecoveryDays,
+      drawdownPeakToRecoveryDays,
+      annualizedVolatilityPct: volatility,
+    },
+  };
+}
+
+async function simulateFromLocal(params) {
+  const selectedAssets = await Promise.all(
+    params.assets.map((assetId) => loadLocalAssetSeries(assetId, params.returnMode))
+  );
+
+  const commonMinDate = selectedAssets
+    .map((asset) => asset.earliestDate)
+    .reduce((latest, current) => (current > latest ? current : latest));
+  const commonMaxDate = selectedAssets
+    .map((asset) => asset.latestDate)
+    .reduce((earliest, current) => (current < earliest ? current : earliest));
+
+  if (params.startDate > commonMaxDate) {
+    throw new Error(`开始日期晚于共同可用区间，请选择不晚于 ${commonMaxDate}`);
+  }
+
+  const effectiveStartDate = params.startDate > commonMinDate ? params.startDate : commonMinDate;
+  const warnings = [];
+  if (effectiveStartDate !== params.startDate) {
+    warnings.push(`开始时间已自动调整为 ${effectiveStartDate}（所选资产共同可用起点）`);
+  }
+  selectedAssets.forEach((asset) => {
+    const resolved = asset.resolvedReturnMode || params.returnMode;
+    if (resolved !== params.returnMode) {
+      warnings.push(
+        `${asset.assetName} 当前回退为${formatReturnModeLabel(resolved)}（请求为${formatReturnModeLabel(
+          params.returnMode
+        )}）`
+      );
+    }
+  });
+
+  const series = selectedAssets.map((asset) => {
+    const simulation = simulateDcaLocal(asset.rows, {
+      startDateIso: effectiveStartDate,
+      endDateIso: commonMaxDate,
+      frequency: params.frequency,
+      amount: params.amount,
+      precision: params.precision,
+    });
+
+    return {
+      assetId: asset.assetId,
+      assetName: asset.assetName,
+      symbol: asset.symbol,
+      requestedReturnMode: asset.requestedReturnMode || params.returnMode,
+      resolvedReturnMode: asset.resolvedReturnMode || params.returnMode,
+      isProxy: Boolean(asset.isProxy),
+      isEstimated: Boolean(asset.isEstimated),
+      provider: asset.provider || "Local Cache",
+      fetchedAt: asset.fetchedAt || null,
+      snapshots: simulation.snapshots,
+      summary: simulation.summary,
+    };
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    request: {
+      assets: params.assets,
+      returnMode: params.returnMode,
+      frequency: params.frequency,
+      precision: params.precision,
+      amount: params.amount,
+      inputStartDate: params.startDate,
+      effectiveStartDate,
+      endDate: commonMaxDate,
+    },
+    warnings,
+    series,
+    source: "本地静态数据（GitHub Pages 模式）",
+  };
 }
 
 function computeAnnualizedReturnPct(series) {
@@ -618,22 +1003,37 @@ async function runSimulation() {
 
   try {
     const returnMode = getSelectedReturnMode();
-    const response = await fetch(buildApiUrl("/api/simulate"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        assets,
-        returnMode,
-        frequency: getSelectedFrequency(),
-        precision: getSelectedPrecision(),
-        startDate: startDateInput.value,
-        amount,
-      }),
-    });
+    const requestPayload = {
+      assets,
+      returnMode,
+      frequency: getSelectedFrequency(),
+      precision: getSelectedPrecision(),
+      startDate: startDateInput.value,
+      amount,
+    };
+    let payload = null;
 
-    const payload = await parseJsonOrThrow(response);
+    if (state.dataSourceMode === "local") {
+      payload = await simulateFromLocal(requestPayload);
+    } else {
+      try {
+        const response = await fetch(buildApiUrl("/api/simulate"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestPayload),
+        });
+        payload = await parseJsonOrThrow(response);
+      } catch (apiError) {
+        payload = await simulateFromLocal(requestPayload);
+        state.dataSourceMode = "local";
+        state.metaWarnings = filterVisibleWarnings([
+          `后端接口不可用，已自动切换本地静态模式（${apiError.message}）`,
+        ]);
+      }
+    }
+
     renderSummaryCards(payload.series);
     renderChart(payload.series);
 
@@ -657,10 +1057,27 @@ async function runSimulation() {
 
 async function loadMeta() {
   const returnMode = getSelectedReturnMode();
-  const response = await fetch(
-    buildApiUrl(`/api/meta?returnMode=${encodeURIComponent(returnMode)}`)
-  );
-  const payload = await parseJsonOrThrow(response);
+  let payload = null;
+
+  if (!runtimeApiBase && isGithubPagesRuntime()) {
+    payload = await loadMetaFromLocal(returnMode);
+    state.dataSourceMode = "local";
+  } else {
+    try {
+      const response = await fetch(
+        buildApiUrl(`/api/meta?returnMode=${encodeURIComponent(returnMode)}`)
+      );
+      payload = await parseJsonOrThrow(response);
+      state.dataSourceMode = "api";
+    } catch (apiError) {
+      payload = await loadMetaFromLocal(returnMode);
+      state.dataSourceMode = "local";
+      payload.warnings = filterVisibleWarnings([
+        ...(Array.isArray(payload.warnings) ? payload.warnings : []),
+        `后端接口不可用，已切换本地静态模式（${apiError.message}）`,
+      ]);
+    }
+  }
 
   if (!Array.isArray(payload.assets) || payload.assets.length === 0) {
     throw new Error("元数据为空");
@@ -681,6 +1098,11 @@ async function init() {
     simulateBtn.disabled = false;
     if (state.metaWarnings.length > 0) {
       setStatus(state.metaWarnings.join("；"), "error");
+    } else if (state.dataSourceMode === "local") {
+      setStatus(
+        `数据已就绪（${formatReturnModeLabel(getSelectedReturnMode())}，本地静态模式）。`,
+        "success"
+      );
     } else {
       setStatus(`数据已就绪（${formatReturnModeLabel(getSelectedReturnMode())}）。`, "success");
     }

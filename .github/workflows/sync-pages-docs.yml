@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "public/**"
+      - "data/market-cache/**"
       - "scripts/sync-pages.mjs"
       - ".github/workflows/sync-pages-docs.yml"
 

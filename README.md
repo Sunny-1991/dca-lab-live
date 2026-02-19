@@ -93,6 +93,8 @@ node scripts/sync-pages.mjs
 window.__DCA_API_BASE__ = "https://dca-lab-api.onrender.com";
 ```
 
+> 若不配置后端，GitHub Pages 会自动启用“本地静态模式”（读取 `docs/data/market-cache/*.json`）并可正常回测，但无法自动拉取最新行情。
+
 ### 4) 开启 GitHub Pages
 
 - Repository Settings -> Pages
