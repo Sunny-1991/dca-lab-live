@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# local env
+.env
+.env.*
+
+# sensitive generated files
+/data/access-control/member-access-codes-*.csv
+/data/access-control/members-import-from-zsxq-*.csv
