@@ -15,6 +15,7 @@ function usage() {
 Usage:
   node scripts/manage-members.mjs list
   node scripts/manage-members.mjs upsert --member-id <id> --name <name> --expires-at <YYYY-MM-DD|ISO> [--access-code <code>] [--status active|paused]
+  node scripts/manage-members.mjs import-csv --file <members.csv>
   node scripts/manage-members.mjs remove --member-id <id>
 `);
 }
@@ -59,6 +60,33 @@ function normalizeExpiry(input) {
 
 function generateAccessCode() {
   return crypto.randomBytes(5).toString('hex');
+}
+
+function splitCsvLine(line) {
+  const cells = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '\"') {
+      const next = line[i + 1];
+      if (inQuotes && next === '\"') {
+        current += '\"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
 async function readStore() {
@@ -158,6 +186,67 @@ async function removeMember(options) {
   }
 }
 
+async function importCsv(options) {
+  const filePath = String(options.file || '').trim();
+  if (!filePath) {
+    throw new Error('missing --file');
+  }
+  const csvText = await readFile(path.resolve(filePath), 'utf8');
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) {
+    throw new Error('CSV is empty');
+  }
+
+  const header = splitCsvLine(lines[0]).map((item) => item.toLowerCase());
+  const idxMemberId = header.indexOf('member_id');
+  const idxName = header.indexOf('name');
+  const idxExpiresAt = header.indexOf('expires_at');
+  const idxAccessCode = header.indexOf('access_code');
+  const idxStatus = header.indexOf('status');
+  if (idxMemberId < 0 || idxExpiresAt < 0 || idxAccessCode < 0) {
+    throw new Error('CSV requires columns: member_id, expires_at, access_code');
+  }
+
+  const data = await readStore();
+  const map = new Map(
+    (Array.isArray(data.members) ? data.members : []).map((item) => [String(item.memberId), item])
+  );
+
+  let upserted = 0;
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = splitCsvLine(lines[i]);
+    const memberId = String(cols[idxMemberId] || '').trim();
+    if (!memberId) continue;
+
+    const expiresAt = normalizeExpiry(cols[idxExpiresAt]);
+    const accessCode = String(cols[idxAccessCode] || '').trim();
+    if (!accessCode) continue;
+    const statusRaw = idxStatus >= 0 ? String(cols[idxStatus] || '').trim().toLowerCase() : 'active';
+    const status = ['active', 'paused'].includes(statusRaw) ? statusRaw : 'active';
+
+    map.set(memberId, {
+      ...(map.get(memberId) || {}),
+      memberId,
+      displayName: idxName >= 0 ? String(cols[idxName] || '').trim() : '',
+      status,
+      expiresAt,
+      accessCodeHash: hashAccessCode(accessCode),
+      updatedAt: new Date().toISOString(),
+    });
+    upserted += 1;
+  }
+
+  data.members = Array.from(map.values()).sort((a, b) =>
+    String(a.memberId).localeCompare(String(b.memberId), 'en')
+  );
+  await writeStore(data);
+  console.log(`Imported rows: ${upserted}`);
+  console.log(`Store path   : ${storePath}`);
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv);
   if (!command || ['-h', '--help', 'help'].includes(command)) {
@@ -178,6 +267,11 @@ async function main() {
 
   if (command === 'remove') {
     await removeMember(options);
+    return;
+  }
+
+  if (command === 'import-csv') {
+    await importCsv(options);
     return;
   }
 
