@@ -89,6 +89,68 @@ window.__DCA_API_BASE__ = "https://your-api-domain.example.com";
 
 ---
 
+## 星球会员访问门槛（已内置）
+
+你提出的目标是：仅“处于有效期的知识星球会员”可以进入网页。  
+本项目已加入服务端门槛能力（登录页 + 会员有效期校验 + 会话 Cookie）。
+
+### 先说关键限制
+
+如果只使用 GitHub Pages（纯静态托管），无法做到真正的权限控制。  
+要实现会员门槛，必须使用后端模式（部署 `server.js`）。
+
+### 门槛方案（当前实现）
+
+- 访问任意业务页面时，未登录会自动跳转到 `/login.html`
+- 登录需要：
+  - `memberId`（会员ID）
+  - `accessCode`（访问码）
+- 服务端校验：
+  - 会员是否存在
+  - `status` 是否为 `active`
+  - 当前时间是否仍在 `expiresAt` 有效期内
+  - 访问码哈希是否匹配
+- 通过后签发 HttpOnly 会话 Cookie，过期后需重新登录
+
+> 说明：知识星球没有通用的第三方 OAuth 网页授权流程可直接给你站点做“官方登录态映射”，
+> 当前实现采用你可控、可落地的会员库方式来保证访问权限。
+
+### 快速配置步骤
+
+1. 启用后端门槛（生产环境变量）
+
+```bash
+AUTH_ENABLED=true
+AUTH_SESSION_SECRET=请设置一个长度足够的随机字符串
+AUTH_CODE_PEPPER=可选_用于加强访问码哈希
+```
+
+2. 管理会员名单（含有效期）
+
+```bash
+node scripts/manage-members.mjs upsert --member-id 10001 --name 张三 --expires-at 2027-01-31 --access-code your_code_here
+node scripts/manage-members.mjs list
+```
+
+3. 启动服务并访问
+
+```bash
+node server.js
+```
+
+未登录将进入登录页，登录成功后可访问主功能页。
+
+4. 会员过期处理
+
+- 到达 `expiresAt` 后自动拒绝访问（新请求即生效）
+- 可用脚本手动更新续费会员有效期：
+
+```bash
+node scripts/manage-members.mjs upsert --member-id 10001 --expires-at 2028-01-31 --status active
+```
+
+---
+
 ## 本地开发
 
 ### 1) 启动后端
@@ -130,12 +192,25 @@ node scripts/fetch-market-data.mjs
 - 从数据源抓取最新价格
 - 更新 `data/market-cache/*.json`
 
+### 管理会员名单（门槛功能）
+
+```bash
+node scripts/manage-members.mjs list
+node scripts/manage-members.mjs upsert --member-id 10001 --name 张三 --expires-at 2027-01-31 --access-code your_code_here
+node scripts/manage-members.mjs remove --member-id 10001
+```
+
+会员数据文件：`data/access-control/members.json`
+
 ---
 
 ## API（后端模式下）
 
 - `GET /api/meta`：返回资产可用区间、数据源信息
 - `POST /api/simulate`：执行回测并返回图表/指标数据
+- `GET /api/auth/me`：查询当前登录态
+- `POST /api/auth/login`：会员登录
+- `POST /api/auth/logout`：退出登录
 
 ---
 
@@ -149,6 +224,12 @@ node scripts/fetch-market-data.mjs
 - `BACKGROUND_REFRESH_INTERVAL_MS`：后台刷新间隔
 - `BACKGROUND_REFRESH_TRIGGER_MS`：触发异步刷新的缓存年龄阈值
 - `STARTUP_REFRESH_DELAY_MS`：启动后首次刷新延迟
+- `AUTH_ENABLED`：是否启用会员门槛（默认 `true`）
+- `AUTH_SESSION_SECRET`：登录会话签发密钥（生产环境必须设置）
+- `AUTH_SESSION_TTL_MS`：会话有效期毫秒（默认 `86400000`）
+- `AUTH_COOKIE_NAME`：会话 Cookie 名称
+- `AUTH_COOKIE_SECURE`：Cookie Secure 策略（`auto` / `true` / `false`）
+- `AUTH_CODE_PEPPER`：访问码哈希附加盐（可选，推荐设置）
 
 ---
 
