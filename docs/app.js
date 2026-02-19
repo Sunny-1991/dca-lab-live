@@ -1028,9 +1028,7 @@ async function runSimulation() {
       } catch (apiError) {
         payload = await simulateFromLocal(requestPayload);
         state.dataSourceMode = "local";
-        state.metaWarnings = filterVisibleWarnings([
-          `后端接口不可用，已自动切换本地静态模式（${apiError.message}）`,
-        ]);
+        state.metaWarnings = [];
       }
     }
 
@@ -1072,10 +1070,7 @@ async function loadMeta() {
     } catch (apiError) {
       payload = await loadMetaFromLocal(returnMode);
       state.dataSourceMode = "local";
-      payload.warnings = filterVisibleWarnings([
-        ...(Array.isArray(payload.warnings) ? payload.warnings : []),
-        `后端接口不可用，已切换本地静态模式（${apiError.message}）`,
-      ]);
+      payload.warnings = filterVisibleWarnings(payload.warnings);
     }
   }
 
@@ -1098,11 +1093,6 @@ async function init() {
     simulateBtn.disabled = false;
     if (state.metaWarnings.length > 0) {
       setStatus(state.metaWarnings.join("；"), "error");
-    } else if (state.dataSourceMode === "local") {
-      setStatus(
-        `数据已就绪（${formatReturnModeLabel(getSelectedReturnMode())}，本地静态模式）。`,
-        "success"
-      );
     } else {
       setStatus(`数据已就绪（${formatReturnModeLabel(getSelectedReturnMode())}）。`, "success");
     }
