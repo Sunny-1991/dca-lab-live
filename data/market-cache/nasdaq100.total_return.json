@@ -8,7 +8,7 @@
   "isEstimated": false,
   "provider": "Stooq",
   "sourceUrl": "https://stooq.com/q/d/l/?s=qqq.us&i=d",
-  "fetchedAt": "2026-02-19T19:53:27.925Z",
+  "fetchedAt": "2026-02-20T05:09:14.998Z",
   "earliestDate": "1999-03-10",
   "latestDate": "2026-02-19",
   "rows": [
@@ -27122,7 +27122,7 @@
     ],
     [
       "2026-02-19",
-      601.7
+      603.47
     ]
   ]
 }
