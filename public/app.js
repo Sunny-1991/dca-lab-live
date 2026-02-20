@@ -342,6 +342,80 @@ function stdDev(values) {
   return Math.sqrt(variance);
 }
 
+function computeMoneyWeightedReturnPct(cashFlows) {
+  if (!Array.isArray(cashFlows) || cashFlows.length < 2) return null;
+
+  const normalized = cashFlows
+    .map((item) => {
+      const amount = Number(item?.amount);
+      const dateObj = item?.dateObj;
+      if (!Number.isFinite(amount) || !dateObj || !Number.isFinite(dateObj.getTime())) return null;
+      return {
+        amount,
+        dateObj,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.dateObj - b.dateObj);
+
+  if (normalized.length < 2) return null;
+
+  const hasOutflow = normalized.some((item) => item.amount < 0);
+  const hasInflow = normalized.some((item) => item.amount > 0);
+  if (!hasOutflow || !hasInflow) return null;
+
+  const baseMs = normalized[0].dateObj.getTime();
+  const annualDays = 365.25;
+  const points = normalized.map((item) => ({
+    amount: item.amount,
+    years: Math.max(0, (item.dateObj.getTime() - baseMs) / (annualDays * 24 * 60 * 60 * 1000)),
+  }));
+
+  const npvAt = (rate) => {
+    if (!Number.isFinite(rate) || rate <= -0.999999999) return NaN;
+    const base = 1 + rate;
+    let total = 0;
+    for (const point of points) {
+      total += point.amount / Math.pow(base, point.years);
+    }
+    return total;
+  };
+
+  let low = -0.999999;
+  let high = 1;
+  let lowVal = npvAt(low);
+  let highVal = npvAt(high);
+  if (!Number.isFinite(lowVal) || !Number.isFinite(highVal)) return null;
+
+  let expandCount = 0;
+  while (lowVal * highVal > 0 && expandCount < 60) {
+    high = high * 2 + 1;
+    highVal = npvAt(high);
+    if (!Number.isFinite(highVal)) return null;
+    expandCount += 1;
+  }
+  if (lowVal * highVal > 0) return null;
+
+  let mid = 0;
+  for (let i = 0; i < 120; i += 1) {
+    mid = (low + high) / 2;
+    const midVal = npvAt(mid);
+    if (!Number.isFinite(midVal)) return null;
+    if (Math.abs(midVal) < 1e-9) break;
+    if (lowVal * midVal <= 0) {
+      high = mid;
+      highVal = midVal;
+    } else {
+      low = mid;
+      lowVal = midVal;
+    }
+  }
+
+  const annualPct = mid * 100;
+  if (!Number.isFinite(annualPct) || annualPct <= -100) return null;
+  return annualPct;
+}
+
 function isoWeekKey(dateObj) {
   const temp = new Date(
     Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate())
@@ -417,6 +491,7 @@ function simulateDcaLocal(seriesRows, params) {
   let scheduleDate = effectiveStartDateObj;
   const monthlyAnchorDay = effectiveStartDateObj.getUTCDate();
   const dailyRows = [];
+  const cashFlows = [];
 
   usableRows.forEach((row) => {
     let contributionCount = 0;
@@ -434,6 +509,10 @@ function simulateDcaLocal(seriesRows, params) {
       shares += contributionValue / row.close;
       totalInvested += contributionValue;
       totalContributionCount += contributionCount;
+      cashFlows.push({
+        dateObj: row.dateObj,
+        amount: -contributionValue,
+      });
     }
 
     const accountValue = shares * row.close;
@@ -466,6 +545,11 @@ function simulateDcaLocal(seriesRows, params) {
   });
 
   const ending = dailyRows[dailyRows.length - 1];
+  cashFlows.push({
+    dateObj: ending.dateObj,
+    amount: ending.accountValue,
+  });
+  const moneyWeightedReturnPct = computeMoneyWeightedReturnPct(cashFlows);
   const snapshots = aggregateSnapshots(dailyRows, precision);
 
   let drawdownPeakDate = null;
@@ -525,6 +609,7 @@ function simulateDcaLocal(seriesRows, params) {
       drawdownRecoveryDate,
       drawdownRecoveryDays,
       drawdownPeakToRecoveryDays,
+      moneyWeightedReturnPct,
       annualizedVolatilityPct: volatility,
     },
   };
@@ -604,7 +689,7 @@ async function simulateFromLocal(params) {
   };
 }
 
-function computeAnnualizedReturnPct(series) {
+function computeApproxAnnualizedReturnPct(series) {
   const summary = series?.summary;
   const snapshots = Array.isArray(series?.snapshots) ? series.snapshots : [];
   if (!summary || snapshots.length < 2) return null;
@@ -633,6 +718,12 @@ function computeAnnualizedReturnPct(series) {
   return (Math.pow(totalMultiple, 1 / years) - 1) * 100;
 }
 
+function computeCapitalAnnualizedReturnPct(series) {
+  const fromSummary = Number(series?.summary?.moneyWeightedReturnPct);
+  if (Number.isFinite(fromSummary)) return fromSummary;
+  return computeApproxAnnualizedReturnPct(series);
+}
+
 function renderSummaryCards(seriesList) {
   summaryCards.innerHTML = "";
 
@@ -643,7 +734,7 @@ function renderSummaryCards(seriesList) {
 
     const profitClass = summary.profitLoss >= 0 ? "gain" : "loss";
     const returnClass = summary.totalReturnPct >= 0 ? "gain" : "loss";
-    const annualizedReturnPct = computeAnnualizedReturnPct(series);
+    const annualizedReturnPct = computeCapitalAnnualizedReturnPct(series);
     const annualizedReturnClass =
       annualizedReturnPct == null ? "" : annualizedReturnPct >= 0 ? "gain" : "loss";
     const annualizedReturnText = formatPercent(annualizedReturnPct);
@@ -665,7 +756,7 @@ function renderSummaryCards(seriesList) {
         <li><span>账户总资产</span><strong>${moneyFormatter.format(summary.endingValue)}</strong></li>
         <li><span>累计收益</span><strong class="${profitClass}">${moneyFormatter.format(summary.profitLoss)}</strong></li>
         <li><span>累计收益率</span><strong class="${returnClass}">${formatPercent(summary.totalReturnPct)}</strong></li>
-        <li><span>年化回报率</span><strong class="${annualizedReturnClass}">${annualizedReturnText}</strong></li>
+        <li><span>资金年化收益率</span><strong class="${annualizedReturnClass}">${annualizedReturnText}</strong></li>
         <li><span>最大回撤</span><strong class="loss">${formatPercent(summary.maxDrawdownPct)}</strong></li>
         <li><span>年化波动率</span><strong>${formatPercent(summary.annualizedVolatilityPct)}</strong></li>
       </ul>
