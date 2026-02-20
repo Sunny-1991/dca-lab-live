@@ -178,7 +178,7 @@ h2 {
   border: 1px solid rgba(118, 136, 161, 0.32);
   background: rgba(240, 244, 251, 0.95);
   color: #54657f;
-  font: 700 0.56rem / 1.1 var(--font-display);
+  font: 700 0.5rem / 1.1 var(--font-display);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   width: fit-content;
